@@ -32,7 +32,7 @@ type kubelocker struct {
 }
 
 // NewLocker creates a Locker
-func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string) (*kubelocker, error) {
+func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string) *kubelocker {
 	name := "kubelocker"
 
 	// create the Lease if it doesn't exist
@@ -40,7 +40,7 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string) (*kube
 	_, err := leaseClient.Get(context.TODO(), name, metav1.GetOptions{})
 	if err != nil {
 		if !k8errors.IsNotFound(err) {
-			return nil, err
+			panic("failed to create lease: " + err.Error())
 		}
 		lease := &coordinationv1.Lease{
 			ObjectMeta: metav1.ObjectMeta{
@@ -52,7 +52,7 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string) (*kube
 		}
 		_, err := leaseClient.Create(context.TODO(), lease, metav1.CreateOptions{})
 		if err != nil {
-			return nil, err
+			panic("failed to create lease: " + err.Error())
 		}
 	}
 	return &kubelocker{
@@ -63,7 +63,7 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string) (*kube
 		maxWait:     30 * time.Second,
 		leaseClient: leaseClient,
 		clientset:   kubeClientset,
-	}, nil
+	}
 }
 
 // Lock will block until the client is the holder of the Lease resource
@@ -165,16 +165,16 @@ func (l *kubelocker) Util_watiForDeployments(nsName string, timeout time.Duratio
 		if err != nil {
 			return err
 		}
-		alldone := true
+		done := true
 		for _, d := range ds.Items {
 			if d.Status.Replicas != d.Status.AvailableReplicas ||
 				d.Status.Replicas != d.Status.ReadyReplicas ||
 				d.Status.Replicas != d.Status.UpdatedReplicas {
-				alldone = false
+				done = false
 				log.Printf("waiting for: %v (%v)", d.Name, nsName)
 			}
 		}
-		if alldone {
+		if done {
 			log.Printf("waited: %v", timeout-ttl)
 			return nil
 		}
