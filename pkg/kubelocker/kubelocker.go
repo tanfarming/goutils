@@ -96,7 +96,7 @@ func (l *kubelocker) Lock() {
 
 		if lease.Spec.HolderIdentity != nil {
 			if lease.Spec.LeaseDurationSeconds == nil {
-				// The lock is already held and has no expiry
+				log.Printf("waiting for %v (no expiry), ttl: %v", lease.Spec.HolderIdentity, ttl)
 				time.Sleep(l.cfg.retryWait)
 				ttl -= l.cfg.retryWait
 				continue
@@ -104,9 +104,9 @@ func (l *kubelocker) Lock() {
 
 			acquireTime := lease.Spec.AcquireTime.Time
 			leaseDuration := time.Duration(*lease.Spec.LeaseDurationSeconds) * time.Second
-
-			if acquireTime.Add(leaseDuration).After(time.Now()) {
-				// The lock is already held and hasn't expired yet
+			exp := acquireTime.Add(leaseDuration)
+			if exp.After(time.Now()) {
+				log.Printf("waiting for %v (exp in: %v), ttl: %v", lease.Spec.HolderIdentity, time.Until(exp), ttl)
 				time.Sleep(l.cfg.retryWait)
 				ttl -= l.cfg.retryWait
 				continue
@@ -136,6 +136,7 @@ func (l *kubelocker) Lock() {
 		}
 
 		// Another client beat us to the lock
+		log.Printf("beaten by another client, will retry, ttl: %v", ttl)
 		time.Sleep(l.cfg.retryWait)
 		ttl -= l.cfg.retryWait
 	}
