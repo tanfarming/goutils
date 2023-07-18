@@ -97,7 +97,7 @@ func (l *kubelocker) Lock() error {
 
 		if lease.Spec.HolderIdentity != nil {
 			if lease.Spec.LeaseDurationSeconds == nil {
-				l._workLog = append(l._workLog, fmt.Sprintf("waiting for %v (no expiry), ttl: %v", lease.Spec.HolderIdentity, ttl))
+				l._workLog = append(l._workLog, fmt.Sprintf("%v, %v is waiting for %v (no expiry), ttl: %v", time.Now(), l.Id(), lease.Spec.HolderIdentity, ttl))
 				time.Sleep(l.cfg.retryWait)
 				ttl -= l.cfg.retryWait
 				continue
@@ -107,7 +107,7 @@ func (l *kubelocker) Lock() error {
 			leaseDuration := time.Duration(*lease.Spec.LeaseDurationSeconds) * time.Second
 			exp := acquireTime.Add(leaseDuration)
 			if exp.After(time.Now()) {
-				l._workLog = append(l._workLog, fmt.Sprintf("waiting for %v (exp in: %v), ttl: %v", lease.Spec.HolderIdentity, time.Until(exp), ttl))
+				l._workLog = append(l._workLog, fmt.Sprintf("%v, %v is waiting for %v (exp in: %v), ttl: %v", time.Now(), l.Id(), lease.Spec.HolderIdentity, time.Until(exp), ttl))
 				time.Sleep(l.cfg.retryWait)
 				ttl -= l.cfg.retryWait
 				continue
@@ -127,6 +127,7 @@ func (l *kubelocker) Lock() error {
 		}
 		_, err = l.leaseClient.Update(context.TODO(), lease, metav1.UpdateOptions{})
 		if err == nil { // locked
+			l._workLog = append(l._workLog, fmt.Sprintf("%v, %v acquired lock in %v", time.Now(), l.Id(), l.cfg.maxWait-ttl))
 			break
 		}
 
