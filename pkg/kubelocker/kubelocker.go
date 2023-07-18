@@ -2,9 +2,7 @@ package kubelocker
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +24,8 @@ type kubelocker struct {
 	clientID    string
 	leaseClient coordinationclientv1.LeaseInterface
 	cfg         kubelockerCfg
+
+	_workLog []string
 }
 
 type kubelockerCfg struct {
@@ -76,6 +76,7 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs .
 		clientID:    uuid.New().String(),
 		leaseClient: leaseClient,
 		cfg:         cfg,
+		_workLog:    []string{},
 	}, nil
 }
 
@@ -96,7 +97,7 @@ func (l *kubelocker) Lock() error {
 
 		if lease.Spec.HolderIdentity != nil {
 			if lease.Spec.LeaseDurationSeconds == nil {
-				log.Printf("waiting for %v (no expiry), ttl: %v", lease.Spec.HolderIdentity, ttl)
+				l._workLog = append(l._workLog, fmt.Sprintf("waiting for %v (no expiry), ttl: %v", lease.Spec.HolderIdentity, ttl))
 				time.Sleep(l.cfg.retryWait)
 				ttl -= l.cfg.retryWait
 				continue
@@ -106,14 +107,14 @@ func (l *kubelocker) Lock() error {
 			leaseDuration := time.Duration(*lease.Spec.LeaseDurationSeconds) * time.Second
 			exp := acquireTime.Add(leaseDuration)
 			if exp.After(time.Now()) {
-				log.Printf("waiting for %v (exp in: %v), ttl: %v", lease.Spec.HolderIdentity, time.Until(exp), ttl)
+				l._workLog = append(l._workLog, fmt.Sprintf("waiting for %v (exp in: %v), ttl: %v", lease.Spec.HolderIdentity, time.Until(exp), ttl))
 				time.Sleep(l.cfg.retryWait)
 				ttl -= l.cfg.retryWait
 				continue
 			}
 		}
 
-		// nobody holds the lock, try to lock it
+		// try to lock
 		lease.Spec.HolderIdentity = pointer.String(l.clientID)
 		if lease.Spec.LeaseTransitions != nil {
 			lease.Spec.LeaseTransitions = pointer.Int32((*lease.Spec.LeaseTransitions) + 1)
@@ -125,18 +126,16 @@ func (l *kubelocker) Lock() error {
 			lease.Spec.LeaseDurationSeconds = pointer.Int32(int32(l.cfg.leaseTtl.Seconds()))
 		}
 		_, err = l.leaseClient.Update(context.TODO(), lease, metav1.UpdateOptions{})
-		if err == nil {
-			// we got the lock, break the loop
+		if err == nil { // locked
 			break
 		}
 
-		if !k8errors.IsConflict(err) {
-			// if the error isn't a conflict then something went horribly wrong
+		if !k8errors.IsConflict(err) { // unexpected
 			return fmt.Errorf("lock: error when trying to update Lease: %v", err)
 		}
 
-		// Another client beat us to the lock
-		log.Printf("beaten by another client, will retry, ttl: %v", ttl)
+		// another client beat us to the lock
+		l._workLog = append(l._workLog, fmt.Sprintf("beaten by another client, will retry, ttl: %v", ttl))
 		time.Sleep(l.cfg.retryWait)
 		ttl -= l.cfg.retryWait
 	}
@@ -172,30 +171,10 @@ func (l *kubelocker) Unlock() error {
 	return nil
 }
 
-func (l *kubelocker) Util_watiForDeployments(nsName string, timeout time.Duration) error {
-	ttl := timeout
-	wait := 5 * time.Second
-	for ttl > 0 {
-		time.Sleep(wait)
-		ttl -= wait
-		log.Printf("ttl: %v (%v)", ttl, nsName)
-		ds, err := l.clientset.AppsV1().Deployments(nsName).List(context.Background(), metav1.ListOptions{})
-		if err != nil {
-			return err
-		}
-		done := true
-		for _, d := range ds.Items {
-			if d.Status.Replicas != d.Status.AvailableReplicas ||
-				d.Status.Replicas != d.Status.ReadyReplicas ||
-				d.Status.Replicas != d.Status.UpdatedReplicas {
-				done = false
-				log.Printf("waiting for: %v (%v)", d.Name, nsName)
-			}
-		}
-		if done {
-			log.Printf("waited: %v", timeout-ttl)
-			return nil
-		}
-	}
-	return errors.New("timeout")
+func (l *kubelocker) WorkLog() []string {
+	return l._workLog
+}
+
+func (l *kubelocker) Id() string {
+	return fmt.Sprintf("<%v,%v/%v>", l.clientID, l.namespace, l.cfg.name)
 }
