@@ -1,4 +1,4 @@
-module main
+module github.com/tanfarming/goutils
 
 go 1.20
 
