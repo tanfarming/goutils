@@ -36,7 +36,7 @@ type kubelockerCfg struct {
 }
 
 // NewLocker creates a Locker
-func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs ...kubelockerCfg) *kubelocker {
+func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs ...kubelockerCfg) (*kubelocker, error) {
 
 	cfg := kubelockerCfg{
 		name:      "kubelocker",
@@ -54,7 +54,7 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs .
 	_, err := leaseClient.Get(context.TODO(), cfg.name, metav1.GetOptions{})
 	if err != nil {
 		if !k8errors.IsNotFound(err) {
-			panic("failed to create lease: " + err.Error())
+			return nil, err
 		}
 		lease := &coordinationv1.Lease{
 			ObjectMeta: metav1.ObjectMeta{
@@ -66,7 +66,7 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs .
 		}
 		_, err := leaseClient.Create(context.TODO(), lease, metav1.CreateOptions{})
 		if err != nil {
-			panic("failed to create lease: " + err.Error())
+			return nil, err
 		}
 	}
 
@@ -76,7 +76,7 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs .
 		clientID:    uuid.New().String(),
 		leaseClient: leaseClient,
 		cfg:         cfg,
-	}
+	}, nil
 }
 
 // Lock will block until the client is the holder of the Lease resource
@@ -86,12 +86,12 @@ func (l *kubelocker) Lock() {
 	// block until we get a lock
 	for {
 		if ttl < 0 {
-			panic(fmt.Sprintf("timeout while trying to get a lease for lock: %v", l))
+			fmt.Printf("timeout while trying to get a lease for lock: %v", l)
 		}
 		// get the Lease
 		lease, err := l.leaseClient.Get(context.TODO(), l.cfg.name, metav1.GetOptions{})
 		if err != nil {
-			panic(fmt.Sprintf("could not get Lease resource for lock: %v", err))
+			fmt.Printf("could not get Lease resource for lock: %v", err)
 		}
 
 		if lease.Spec.HolderIdentity != nil {
@@ -132,7 +132,7 @@ func (l *kubelocker) Lock() {
 
 		if !k8errors.IsConflict(err) {
 			// if the error isn't a conflict then something went horribly wrong
-			panic(fmt.Sprintf("lock: error when trying to update Lease: %v", err))
+			fmt.Printf("lock: error when trying to update Lease: %v", err)
 		}
 
 		// Another client beat us to the lock
@@ -147,16 +147,16 @@ func (l *kubelocker) Unlock() {
 
 	lease, err := l.leaseClient.Get(context.TODO(), l.cfg.name, metav1.GetOptions{})
 	if err != nil {
-		panic(fmt.Sprintf("could not get Lease resource for lock: %v", err))
+		fmt.Printf("could not get Lease resource for lock: %v", err)
 	}
 
 	// the holder has to have a value and has to be our ID for us to be able to unlock
 	if lease.Spec.HolderIdentity == nil {
-		panic("unlock: no lock holder value")
+		log.Printf("unlock: no lock holder value")
 	}
 
 	if *lease.Spec.HolderIdentity != l.clientID {
-		panic("unlock: not the lock holder")
+		log.Printf("unlock: not the lock holder")
 	}
 
 	lease.Spec.HolderIdentity = nil
@@ -164,7 +164,7 @@ func (l *kubelocker) Unlock() {
 	lease.Spec.LeaseDurationSeconds = nil
 	_, err = l.leaseClient.Update(context.TODO(), lease, metav1.UpdateOptions{})
 	if err != nil {
-		panic(fmt.Sprintf("unlock: error when trying to update Lease: %v", err))
+		log.Printf("unlock: error when trying to update Lease: %v", err)
 	}
 }
 
