@@ -22,29 +22,43 @@ import (
 
 type kubelocker struct {
 	clientset   *kubernetes.Clientset
-	leaseClient coordinationclientv1.LeaseInterface
 	namespace   string
-	name        string
 	clientID    string
-	retryWait   time.Duration
-	maxWait     time.Duration
-	ttl         time.Duration
+	leaseClient coordinationclientv1.LeaseInterface
+	cfg         kubelockerCfg
+}
+
+type kubelockerCfg struct {
+	name      string
+	leaseTtl  time.Duration
+	maxWait   time.Duration
+	retryWait time.Duration
 }
 
 // NewLocker creates a Locker
-func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string) *kubelocker {
-	name := "kubelocker"
+func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs ...kubelockerCfg) *kubelocker {
+
+	cfg := kubelockerCfg{
+		name:      "kubelocker",
+		leaseTtl:  55 * time.Second,
+		maxWait:   120 * time.Second,
+		retryWait: 6 * time.Second,
+	}
+
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 
 	// create the Lease if it doesn't exist
 	leaseClient := kubeClientset.CoordinationV1().Leases(namespace)
-	_, err := leaseClient.Get(context.TODO(), name, metav1.GetOptions{})
+	_, err := leaseClient.Get(context.TODO(), cfg.name, metav1.GetOptions{})
 	if err != nil {
 		if !k8errors.IsNotFound(err) {
 			panic("failed to create lease: " + err.Error())
 		}
 		lease := &coordinationv1.Lease{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: name,
+				Name: cfg.name,
 			},
 			Spec: coordinationv1.LeaseSpec{
 				LeaseTransitions: pointer.Int32(0),
@@ -55,20 +69,19 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string) *kubel
 			panic("failed to create lease: " + err.Error())
 		}
 	}
+
 	return &kubelocker{
-		name:        name,
+		clientset:   kubeClientset,
 		namespace:   namespace,
 		clientID:    uuid.New().String(),
-		retryWait:   1000 * time.Millisecond,
-		maxWait:     30 * time.Second,
 		leaseClient: leaseClient,
-		clientset:   kubeClientset,
+		cfg:         cfg,
 	}
 }
 
 // Lock will block until the client is the holder of the Lease resource
 func (l *kubelocker) Lock() {
-	ttl := l.maxWait
+	ttl := l.cfg.maxWait
 
 	// block until we get a lock
 	for {
@@ -76,7 +89,7 @@ func (l *kubelocker) Lock() {
 			panic(fmt.Sprintf("timeout while trying to get a lease for lock: %v", l))
 		}
 		// get the Lease
-		lease, err := l.leaseClient.Get(context.TODO(), l.name, metav1.GetOptions{})
+		lease, err := l.leaseClient.Get(context.TODO(), l.cfg.name, metav1.GetOptions{})
 		if err != nil {
 			panic(fmt.Sprintf("could not get Lease resource for lock: %v", err))
 		}
@@ -84,8 +97,8 @@ func (l *kubelocker) Lock() {
 		if lease.Spec.HolderIdentity != nil {
 			if lease.Spec.LeaseDurationSeconds == nil {
 				// The lock is already held and has no expiry
-				time.Sleep(l.retryWait)
-				ttl -= l.retryWait
+				time.Sleep(l.cfg.retryWait)
+				ttl -= l.cfg.retryWait
 				continue
 			}
 
@@ -94,13 +107,13 @@ func (l *kubelocker) Lock() {
 
 			if acquireTime.Add(leaseDuration).After(time.Now()) {
 				// The lock is already held and hasn't expired yet
-				time.Sleep(l.retryWait)
-				ttl -= l.retryWait
+				time.Sleep(l.cfg.retryWait)
+				ttl -= l.cfg.retryWait
 				continue
 			}
 		}
 
-		// nobody holds the lock, try and lock it
+		// nobody holds the lock, try to lock it
 		lease.Spec.HolderIdentity = pointer.String(l.clientID)
 		if lease.Spec.LeaseTransitions != nil {
 			lease.Spec.LeaseTransitions = pointer.Int32((*lease.Spec.LeaseTransitions) + 1)
@@ -108,8 +121,8 @@ func (l *kubelocker) Lock() {
 			lease.Spec.LeaseTransitions = pointer.Int32((*lease.Spec.LeaseTransitions) + 1)
 		}
 		lease.Spec.AcquireTime = &metav1.MicroTime{time.Now()}
-		if l.ttl.Seconds() > 0 {
-			lease.Spec.LeaseDurationSeconds = pointer.Int32(int32(l.ttl.Seconds()))
+		if l.cfg.leaseTtl.Seconds() > 0 {
+			lease.Spec.LeaseDurationSeconds = pointer.Int32(int32(l.cfg.leaseTtl.Seconds()))
 		}
 		_, err = l.leaseClient.Update(context.TODO(), lease, metav1.UpdateOptions{})
 		if err == nil {
@@ -123,15 +136,15 @@ func (l *kubelocker) Lock() {
 		}
 
 		// Another client beat us to the lock
-		time.Sleep(l.retryWait)
-		ttl -= l.retryWait
+		time.Sleep(l.cfg.retryWait)
+		ttl -= l.cfg.retryWait
 	}
 }
 
 // Unlock will remove the client as the holder of the Lease resource
 func (l *kubelocker) Unlock() {
 
-	lease, err := l.leaseClient.Get(context.TODO(), l.name, metav1.GetOptions{})
+	lease, err := l.leaseClient.Get(context.TODO(), l.cfg.name, metav1.GetOptions{})
 	if err != nil {
 		panic(fmt.Sprintf("could not get Lease resource for lock: %v", err))
 	}
