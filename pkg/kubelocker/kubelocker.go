@@ -80,18 +80,18 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs .
 }
 
 // Lock will block until the client is the holder of the Lease resource
-func (l *kubelocker) Lock() {
+func (l *kubelocker) Lock() error {
 	ttl := l.cfg.maxWait
 
 	// block until we get a lock
 	for {
 		if ttl < 0 {
-			fmt.Printf("timeout while trying to get a lease for lock: %v", l)
+			return fmt.Errorf("timeout while trying to get a lease for lock: %+v", l)
 		}
 		// get the Lease
 		lease, err := l.leaseClient.Get(context.TODO(), l.cfg.name, metav1.GetOptions{})
 		if err != nil {
-			fmt.Printf("could not get Lease resource for lock: %v", err)
+			return fmt.Errorf("could not get Lease resource for lock: %v", err)
 		}
 
 		if lease.Spec.HolderIdentity != nil {
@@ -132,7 +132,7 @@ func (l *kubelocker) Lock() {
 
 		if !k8errors.IsConflict(err) {
 			// if the error isn't a conflict then something went horribly wrong
-			fmt.Printf("lock: error when trying to update Lease: %v", err)
+			return fmt.Errorf("lock: error when trying to update Lease: %v", err)
 		}
 
 		// Another client beat us to the lock
@@ -140,23 +140,26 @@ func (l *kubelocker) Lock() {
 		time.Sleep(l.cfg.retryWait)
 		ttl -= l.cfg.retryWait
 	}
+	return nil
 }
 
 // Unlock will remove the client as the holder of the Lease resource
-func (l *kubelocker) Unlock() {
+func (l *kubelocker) Unlock() error {
 
 	lease, err := l.leaseClient.Get(context.TODO(), l.cfg.name, metav1.GetOptions{})
 	if err != nil {
-		fmt.Printf("could not get Lease resource for lock: %v", err)
+		return fmt.Errorf("[ERROR] could not get Lease resource for lock: %v", err)
+
 	}
 
 	// the holder has to have a value and has to be our ID for us to be able to unlock
 	if lease.Spec.HolderIdentity == nil {
-		log.Printf("unlock: no lock holder value")
+		return fmt.Errorf("[ERROR] unlock: no lock holder value")
+
 	}
 
 	if *lease.Spec.HolderIdentity != l.clientID {
-		log.Printf("unlock: not the lock holder")
+		return fmt.Errorf("[ERROR] unlock: not the lock holder")
 	}
 
 	lease.Spec.HolderIdentity = nil
@@ -164,8 +167,9 @@ func (l *kubelocker) Unlock() {
 	lease.Spec.LeaseDurationSeconds = nil
 	_, err = l.leaseClient.Update(context.TODO(), lease, metav1.UpdateOptions{})
 	if err != nil {
-		log.Printf("unlock: error when trying to update Lease: %v", err)
+		return fmt.Errorf("[ERROR] unlock: error when trying to update Lease: %v", err)
 	}
+	return nil
 }
 
 func (l *kubelocker) Util_watiForDeployments(nsName string, timeout time.Duration) error {
