@@ -107,7 +107,7 @@ func (l *kubelocker) Lock() error {
 			leaseDuration := time.Duration(*lease.Spec.LeaseDurationSeconds) * time.Second
 			exp := acquireTime.Add(leaseDuration)
 			if exp.After(time.Now()) {
-				l._workLog = append(l._workLog, fmt.Sprintf("%v, %v is waiting for %v (exp in: %v), ttl: %v", time.Now(), l.Id(), lease.Spec.HolderIdentity, time.Until(exp), ttl))
+				l._workLog = append(l._workLog, fmt.Sprintf("%v, %v is waiting for %v (exp in: %v), ttl: %v", time.Now(), l.Id(), *lease.Spec.HolderIdentity, time.Until(exp), ttl))
 				time.Sleep(l.cfg.retryWait)
 				ttl -= l.cfg.retryWait
 				continue
