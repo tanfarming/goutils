@@ -20,45 +20,43 @@ import (
 
 type kubelocker struct {
 	clientset   *kubernetes.Clientset
+	name        string
 	namespace   string
 	clientID    string
 	leaseClient coordinationclientv1.LeaseInterface
-	cfg         kubelockerCfg
+	cfg         TtlCfgs
 
 	_workLog []string
 }
 
-type kubelockerCfg struct {
-	name      string
+type TtlCfgs struct {
 	leaseTtl  time.Duration
 	maxWait   time.Duration
 	retryWait time.Duration
 }
 
-// NewLocker creates a Locker
-func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs ...kubelockerCfg) (*kubelocker, error) {
+func NewNamed(kubeClientset *kubernetes.Clientset, namespace, name string, ttlCfgs ...TtlCfgs) (*kubelocker, error) {
 
-	cfg := kubelockerCfg{
-		name:      "kubelocker",
-		leaseTtl:  55 * time.Second,
-		maxWait:   120 * time.Second,
-		retryWait: 6 * time.Second,
+	cfg := TtlCfgs{
+		leaseTtl:  30 * time.Second,
+		maxWait:   60 * time.Second,
+		retryWait: 3 * time.Second,
 	}
 
-	if len(cfgs) == 1 {
-		cfg = cfgs[0]
+	if len(ttlCfgs) == 1 {
+		cfg = ttlCfgs[0]
 	}
 
 	// create the Lease if it doesn't exist
 	leaseClient := kubeClientset.CoordinationV1().Leases(namespace)
-	_, err := leaseClient.Get(context.TODO(), cfg.name, metav1.GetOptions{})
+	_, err := leaseClient.Get(context.TODO(), name, metav1.GetOptions{})
 	if err != nil {
 		if !k8errors.IsNotFound(err) {
 			return nil, err
 		}
 		lease := &coordinationv1.Lease{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: cfg.name,
+				Name: name,
 			},
 			Spec: coordinationv1.LeaseSpec{
 				LeaseTransitions: pointer.Int32(0),
@@ -71,6 +69,7 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs .
 	}
 
 	return &kubelocker{
+		name:        name,
 		clientset:   kubeClientset,
 		namespace:   namespace,
 		clientID:    uuid.New().String(),
@@ -78,6 +77,11 @@ func Newkubelocker(kubeClientset *kubernetes.Clientset, namespace string, cfgs .
 		cfg:         cfg,
 		_workLog:    []string{},
 	}, nil
+}
+
+// New kubelocker with default name and TtlCfgs
+func NewDefault(kubeClientset *kubernetes.Clientset, namespace string) (*kubelocker, error) {
+	return NewNamed(kubeClientset, namespace, "kubelocker")
 }
 
 // Lock will block until the client is the holder of the Lease resource
@@ -90,7 +94,7 @@ func (l *kubelocker) Lock() error {
 			return fmt.Errorf("timeout while trying to get a lease for lock: %+v", l)
 		}
 		// get the Lease
-		lease, err := l.leaseClient.Get(context.TODO(), l.cfg.name, metav1.GetOptions{})
+		lease, err := l.leaseClient.Get(context.TODO(), l.name, metav1.GetOptions{})
 		if err != nil {
 			return fmt.Errorf("could not get Lease resource for lock: %v", err)
 		}
@@ -146,7 +150,7 @@ func (l *kubelocker) Lock() error {
 // Unlock will remove the client as the holder of the Lease resource
 func (l *kubelocker) Unlock() error {
 
-	lease, err := l.leaseClient.Get(context.TODO(), l.cfg.name, metav1.GetOptions{})
+	lease, err := l.leaseClient.Get(context.TODO(), l.name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("[ERROR] could not get Lease resource for lock: %v", err)
 
@@ -177,5 +181,5 @@ func (l *kubelocker) WorkLog() []string {
 }
 
 func (l *kubelocker) Id() string {
-	return fmt.Sprintf("<%v,%v/%v>", l.clientID, l.namespace, l.cfg.name)
+	return fmt.Sprintf("<%v,%v/%v>", l.clientID, l.namespace, l.name)
 }
