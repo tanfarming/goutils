@@ -3,7 +3,9 @@
 package filelocker
 
 import (
+	"fmt"
 	"io/fs"
+	"os"
 	"syscall"
 )
 
@@ -23,7 +25,7 @@ func lock(f *os.File, lt lockType) (err error) {
 	}
 	if err != nil {
 		return &fs.PathError{
-			Op:   lt.String(),
+			Op:   fmt.Sprintf("%v", lt),
 			Path: f.Name(),
 			Err:  err,
 		}
